@@ -1,0 +1,968 @@
+{
+  "info": {
+    "_postman_id": "1c8cf438-bd48-45df-95d0-949dd2931beb",
+    "name": "ANF Migrate",
+    "description": "This collection provides a step-by-step workflow for migrating volumes to **Azure NetApp Files (ANF)** using external replication. It covers the full migration lifecycle, from initial setup through to cutover, using the Azure NetApp Files REST API.\n\n---\n\n## Folders\n\n### Setup\nEstablishes the replication relationship between the source (external ONTAP cluster) and the ANF target volume:\n\n1. **Step 0. Authorization** — Obtains an OAuth2 bearer token required to authenticate all subsequent API calls.\n2. **Step 1. Create Target Volume** — Provisions the destination ANF volume configured for external replication.\n3. **Step 2. Check Volume Creation Progress** — Polls the async operation to confirm the target volume is ready.\n4. **Step 3. Issue Cluster Peer Request** — Initiates cluster peering between the external ONTAP cluster and ANF.\n5. **Step 4. Get Cluster Peering Command & Passphrase** — Retrieves the peering command and passphrase needed to complete the cluster peer on the source side.\n6. **Step 5. Authorize External Replication** — Authorizes the replication relationship, allowing data transfer to begin.\n7. **Step 6. Get Vserver Peering Command** — Retrieves the SVM/vserver peering command to finalize the peer relationship on the source cluster.\n\n### Pre-Cutover and Cutover\nManages the final replication sync and the cutover to the ANF volume:\n\n1. **Change Replication Schedule** — Adjusts the replication schedule in preparation for cutover (e.g., increasing frequency).\n2. **Issue Re-Sync Request** — Triggers a manual replication transfer to minimize data lag before cutover.\n3. **Issue Break Relationship Request** — Breaks the replication relationship, making the ANF volume writable for cutover.\n4. **Get Async ID – Break** — Polls the async operation to confirm the break has completed.\n5. **Issue Finalize External Replication** — Finalizes the external replication setup post-cutover.\n6. **Get Async ID – Finalize** — Polls the async operation to confirm finalization is complete.\n\n---\n\n## Prerequisites\n- An active Azure subscription with ANF configured (account, capacity pool, and resource group).\n- Valid Azure AD credentials to obtain an OAuth2 token.\n- Environment variables set for: `authcloudurl`, `apicloudurl`, `tenant`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `api-version`, and `ma.volumeName`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "949385",
+    "_collection_link": "https://go.postman.co/collection/949385-1c8cf438-bd48-45df-95d0-949dd2931beb?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Azure Authentication",
+      "item": [
+        {
+          "name": "Step 0. Authorization",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Retrieving Token\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.globals.set(\"token\", jsonData.access_token);",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text",
+                  "uuid": "7229759e-35bf-4428-b550-a3be16acf8b3"
+                },
+                {
+                  "key": "resource",
+                  "value": "https://management.azure.com",
+                  "type": "text",
+                  "uuid": "43640e15-34b4-41b5-99a4-3df4e47a28b8"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}",
+                  "type": "text",
+                  "uuid": "fb5646ef-29d2-4a5c-b55d-a38abc4d33a8"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{appId}}",
+                  "type": "text",
+                  "uuid": "7f59d347-aa22-4b57-bc60-084a8b392d2d"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{authcloudurl}}/{{tenant}}/oauth2/token",
+              "host": [
+                "{{authcloudurl}}"
+              ],
+              "path": [
+                "{{tenant}}",
+                "oauth2",
+                "token"
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Replication Setup",
+      "item": [
+        {
+          "name": "Step 1. Create Target Volume",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+                  "",
+                  "if (asyncOperationValue) {",
+                  "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+                  "} else {",
+                  "    console.warn(\"azure-asyncoperation header not found\");",
+                  "}",
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"type\": \"Microsoft.NetApp/netAppAccounts/capacityPools/volumes\",\n    \"location\": \"{{location}}\",\n    \"properties\": {\n        \"volumeType\": \"Migration\",\n        \"dataProtection\": {\n            \"replication\": {\n                \"endpointType\": \"Dst\",\n                \"replicationSchedule\": \"daily\",\n                \"remotePath\": {\n                    \"externalHostName\": \"{{ma.externalHostName}}\",\n                    \"serverName\": \"{{ma.serverName}}\",\n                    \"volumeName\": \"{{ma.volumeName}}\"\n                }\n            }\n        },\n        \"serviceLevel\": \"{{serviceLevel}}\",\n        \"throughputMibps\": \"{{throughputMibps}}\",\n        \"creationToken\": \"{{ma.volumeName}}\",\n        \"usageThreshold\": {{vol.usageThreshold}},\n        // \"exportPolicy\": {\n        //     \"rules\": [\n        //         {\n        //             \"ruleIndex\": 1,\n        //             \"unixReadOnly\": false,\n        //             \"unixReadWrite\": true,\n        //             \"cifs\": false,\n        //             \"nfsv3\": true,\n        //             \"nfsv41\": false,\n        //             \"allowedClients\": \"0.0.0.0/0\",\n        //             \"kerberos5ReadOnly\": false,\n        //             \"kerberos5ReadWrite\": false,\n        //             \"kerberos5iReadOnly\": false,\n        //             \"kerberos5iReadWrite\": false,\n        //             \"kerberos5pReadOnly\": false,\n        //             \"kerberos5pReadWrite\": false,\n        //             \"hasRootAccess\": true\n        //         }\n        //     ]\n        // },\n        \"protocolTypes\": [\n            \"{{vol.protocolTypes}}\"\n        ],\n        \"subnetId\": \"{{vol.subnetId}}\",\n        \"networkFeatures\": \"Standard\",\n        \"isLargeVolume\": \"false\"\n    }\n}"
+            },
+            "url": {
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}?api-version={{api-version}}",
+              "host": [
+                "{{apicloudurl}}"
+              ],
+              "path": [
+                "subscriptions",
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{ma.volumeName}}"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "{{api-version}}"
+                }
+              ]
+            },
+            "description": "Create or update the specified volume within the capacity pool."
+          },
+          "response": []
+        },
+        {
+          "name": "Step 2. Check Volume Creation Progress",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{ma.Azure-AsyncOperationID}}",
+              "host": [
+                "{{ma.Azure-AsyncOperationID}}"
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        },
+        {
+          "name": "Step 3. Issue Cluster Peer Request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+                  "",
+                  "if (asyncOperationValue) {",
+                  "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+                  "} else {",
+                  "    console.warn(\"azure-asyncoperation header not found\");",
+                  "}",
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \r\n   \"PeerClusterName\":\"{{ma.externalHostName}}\", \r\n   \"PeerAddresses\":[ \r\n{{ma.peerAddresses}}\r\n   ] \r\n} "
+            },
+            "url": {
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/peerExternalCluster?api-version={{api-version}}",
+              "host": [
+                "{{apicloudurl}}"
+              ],
+              "path": [
+                "subscriptions",
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{ma.volumeName}}",
+                "peerExternalCluster"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "{{api-version}}"
+                }
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        },
+        {
+          "name": "Step 4. Get Cluster Peering Command & Passphrase",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{ma.Azure-AsyncOperationID}}",
+              "host": [
+                "{{ma.Azure-AsyncOperationID}}"
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        },
+        {
+          "name": "Step 5. Authorize External Replication",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+                  "",
+                  "if (asyncOperationValue) {",
+                  "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+                  "} else {",
+                  "    console.warn(\"azure-asyncoperation header not found\");",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/authorizeExternalReplication?api-version={{api-version}}&",
+              "host": [
+                "{{apicloudurl}}"
+              ],
+              "path": [
+                "subscriptions",
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{ma.volumeName}}",
+                "authorizeExternalReplication"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "{{api-version}}"
+                },
+                {
+                  "key": "",
+                  "value": null
+                }
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        },
+        {
+          "name": "Step 6. get vserver peering command",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{ma.Azure-AsyncOperationID}}",
+              "host": [
+                "{{ma.Azure-AsyncOperationID}}"
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        }
+      ],
+      "description": "Establishes the replication relationship between the source (external ONTAP cluster) and the ANF target volume. Run these steps in order before initiating data replication.\n\n**Steps**\n\n1. **Step 0. Authorization** — Obtains an OAuth2 bearer token required to authenticate all subsequent API calls. The token is stored as a global variable and is valid for one hour.\n2. **Step 1. Create Target Volume** — Creates (or updates) the destination volume in the specified ANF capacity pool, configured to receive external replication data.\n3. **Step 2. Check Volume Creation Progress** — Polls the async operation URL to confirm the target volume has been successfully provisioned before proceeding.\n4. **Step 3. Issue Cluster Peer Request** — Initiates a cluster peering request between the ANF volume and the external ONTAP source cluster.\n5. **Step 4. Get Cluster Peering Command & Passphrase** — Retrieves the peering command and passphrase that must be run on the source ONTAP cluster to complete the cluster peer relationship.\n6. **Step 5. Authorize External Replication** — Authorizes the external replication relationship on the ANF target volume, enabling data transfer from the source.\n7. **Step 6. Get vServer Peering Command** — Retrieves the vServer peering command to be executed on the source cluster, finalizing the SVM-level peer relationship required for SnapMirror replication.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{token}}",
+            "type": "string"
+          }
+        ]
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {},
+            "exec": [
+              ""
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {},
+            "exec": [
+              ""
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pre-Cutover and Cutover",
+      "item": [
+        {
+          "name": "Change Replication Schedule",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"properties\": {\n        \"dataProtection\": {\n            \"replication\": {\n                \"replicationSchedule\": \"_10minutely\"\n            }\n        }\n    }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{resource}}subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}?api-version=2026-01-01",
+              "host": [
+                "{{resource}}subscriptions"
+              ],
+              "path": [
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{ma.volumeName}}"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "2026-01-01"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Issue Re-Sync Request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{volumeName}}/performReplicationTransfer?api-version={{api-version}}",
+              "host": [
+                "{{apicloudurl}}"
+              ],
+              "path": [
+                "subscriptions",
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{volumeName}}",
+                "performReplicationTransfer"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "{{api-version}}"
+                }
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        },
+        {
+          "name": "Issue Break Relationship Request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+                  "",
+                  "if (asyncOperationValue) {",
+                  "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+                  "} else {",
+                  "    console.warn(\"azure-asyncoperation header not found\");",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/breakReplication?api-version={{api-version}}",
+              "host": [
+                "{{apicloudurl}}"
+              ],
+              "path": [
+                "subscriptions",
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{ma.volumeName}}",
+                "breakReplication"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "{{api-version}}"
+                }
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        },
+        {
+          "name": "get Async ID - Break",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{ma.Azure-AsyncOperationID}}",
+              "host": [
+                "{{ma.Azure-AsyncOperationID}}"
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        },
+        {
+          "name": "Issue Finalize External Replication",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+                  "",
+                  "if (asyncOperationValue) {",
+                  "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+                  "} else {",
+                  "    console.warn(\"azure-asyncoperation header not found\");",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/finalizeExternalReplication?api-version={{api-version}}",
+              "host": [
+                "{{apicloudurl}}"
+              ],
+              "path": [
+                "subscriptions",
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{ma.volumeName}}",
+                "finalizeExternalReplication"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "{{api-version}}"
+                }
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        },
+        {
+          "name": "get Async ID - Finalize",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{ma.Azure-AsyncOperationID}}",
+              "host": [
+                "{{ma.Azure-AsyncOperationID}}"
+              ]
+            },
+            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+          },
+          "response": []
+        }
+      ],
+      "description": "Prepares the ANF target volume for cutover and severs the external replication relationship from the source ONTAP cluster. Run these steps in order when you are ready to migrate workloads to ANF.\n\n**Steps**\n\n1. **Change Replication Schedule** — Adjusts the replication schedule on the target volume (e.g. to increase transfer frequency) in preparation for the final sync before cutover.\n2. **Issue Re-Sync Request** — Triggers an on-demand replication transfer to perform a final data sync from the source volume to the ANF target.\n3. **Issue Break Relationship Request** — Breaks the external replication relationship, making the ANF target volume writable and ready to serve data.\n4. **get Async ID - Break** — Polls the Azure async operation URL to confirm the break-replication request has completed successfully.\n5. **Issue Finalize External Replication** — Finalises the external replication configuration on the ANF volume, completing the migration.\n6. **get Async ID - Finalize** — Polls the Azure async operation URL to confirm the finalize request has completed successfully.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{token}}",
+            "type": "string"
+          }
+        ]
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {},
+            "exec": [
+              ""
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {},
+            "exec": [
+              ""
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "ma.Azure-AsyncOperation ID",
+      "value": ""
+    }
+  ]
+}
