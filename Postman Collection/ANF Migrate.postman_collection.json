@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "1c8cf438-bd48-45df-95d0-949dd2931beb",
     "name": "ANF Migrate",
-    "description": "This collection provides a step-by-step workflow for migrating volumes to **Azure NetApp Files (ANF)** using external replication. It covers the full migration lifecycle, from initial setup through to cutover, using the Azure NetApp Files REST API.\n\n---\n\n## Folders\n\n### Setup\nEstablishes the replication relationship between the source (external ONTAP cluster) and the ANF target volume:\n\n1. **Step 0. Authorization** — Obtains an OAuth2 bearer token required to authenticate all subsequent API calls.\n2. **Step 1. Create Target Volume** — Provisions the destination ANF volume configured for external replication.\n3. **Step 2. Check Volume Creation Progress** — Polls the async operation to confirm the target volume is ready.\n4. **Step 3. Issue Cluster Peer Request** — Initiates cluster peering between the external ONTAP cluster and ANF.\n5. **Step 4. Get Cluster Peering Command & Passphrase** — Retrieves the peering command and passphrase needed to complete the cluster peer on the source side.\n6. **Step 5. Authorize External Replication** — Authorizes the replication relationship, allowing data transfer to begin.\n7. **Step 6. Get Vserver Peering Command** — Retrieves the SVM/vserver peering command to finalize the peer relationship on the source cluster.\n\n### Pre-Cutover and Cutover\nManages the final replication sync and the cutover to the ANF volume:\n\n1. **Change Replication Schedule** — Adjusts the replication schedule in preparation for cutover (e.g., increasing frequency).\n2. **Issue Re-Sync Request** — Triggers a manual replication transfer to minimize data lag before cutover.\n3. **Issue Break Relationship Request** — Breaks the replication relationship, making the ANF volume writable for cutover.\n4. **Get Async ID – Break** — Polls the async operation to confirm the break has completed.\n5. **Issue Finalize External Replication** — Finalizes the external replication setup post-cutover.\n6. **Get Async ID – Finalize** — Polls the async operation to confirm finalization is complete.\n\n---\n\n## Prerequisites\n- An active Azure subscription with ANF configured (account, capacity pool, and resource group).\n- Valid Azure AD credentials to obtain an OAuth2 token.\n- Environment variables set for: `authcloudurl`, `apicloudurl`, `tenant`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `api-version`, and `ma.volumeName`.",
+    "description": "This collection automates the migration of NFS/SMB volumes from an on-premises ONTAP cluster to Azure NetApp Files (ANF) using the ANF External Replication (Migration as a Service) feature.\n\nWork through the folders in order:\n\n1. **Azure Authentication** — Obtain an OAuth 2.0 bearer token from Azure AD. This token is stored as a global variable and used by all subsequent API calls.\n2. **Replication Setup** — Create the ANF target volume, establish cluster and SVM peering with the source ONTAP system, and authorize the external replication relationship.\n3. **Pre-Cutover and Cutover** — Monitor and manage the ongoing replication, trigger a final sync, break the replication relationship, and finalize the migration so the ANF volume is ready to serve production workloads.\n\n**Prerequisites**\n- An Azure service principal with Contributor rights on the target subscription.\n- A running ONTAP cluster reachable from the ANF delegated subnet.\n- All required environment variables populated in the active Postman environment (`tenant`, `subscriptionId`, `appId`, `clientSecret`, `accountName`, `resourceGroupName`, `poolName`, `ma.volumeName`, `ma.externalHostName`, `ma.serverName`, `ma.peerAddresses`, etc.).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "949385",
     "_collection_link": "https://go.postman.co/collection/949385-1c8cf438-bd48-45df-95d0-949dd2931beb?source=collection_link"
@@ -72,11 +72,12 @@
                 "token"
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Requests an OAuth 2.0 bearer token from Azure Active Directory using the client credentials flow. The token is extracted from the response and stored in the `token` global variable, which is automatically used as a Bearer token in the Authorization header of all subsequent requests in this collection.\n\nTokens are valid for approximately 1 hour. Re-run this request if any subsequent call returns a `401 Unauthorized` error.\n\n**Required variables:** `authcloudurl`, `tenant`, `appId`, `clientSecret`"
           },
           "response": []
         }
-      ]
+      ],
+      "description": "Obtains an OAuth 2.0 bearer token from Azure Active Directory using client credentials (service principal). The token is stored as a global variable (`token`) and is automatically included as a Bearer token in the Authorization header of all subsequent ANF API requests.\n\n**Run this folder first** before executing any other folder in the collection. Tokens are valid for 1 hour; re-run this request if you receive `401 Unauthorized` responses.\n\n**Required variables:** `authcloudurl`, `tenant`, `appId`, `clientSecret`, `subscriptionId`"
     },
     {
       "name": "Replication Setup",
@@ -119,7 +120,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"type\": \"Microsoft.NetApp/netAppAccounts/capacityPools/volumes\",\n    \"location\": \"{{location}}\",\n    \"properties\": {\n        \"volumeType\": \"Migration\",\n        \"dataProtection\": {\n            \"replication\": {\n                \"endpointType\": \"Dst\",\n                \"replicationSchedule\": \"daily\",\n                \"remotePath\": {\n                    \"externalHostName\": \"{{ma.externalHostName}}\",\n                    \"serverName\": \"{{ma.serverName}}\",\n                    \"volumeName\": \"{{ma.volumeName}}\"\n                }\n            }\n        },\n        \"serviceLevel\": \"{{serviceLevel}}\",\n        \"throughputMibps\": \"{{throughputMibps}}\",\n        \"creationToken\": \"{{ma.volumeName}}\",\n        \"usageThreshold\": {{vol.usageThreshold}},\n        // \"exportPolicy\": {\n        //     \"rules\": [\n        //         {\n        //             \"ruleIndex\": 1,\n        //             \"unixReadOnly\": false,\n        //             \"unixReadWrite\": true,\n        //             \"cifs\": false,\n        //             \"nfsv3\": true,\n        //             \"nfsv41\": false,\n        //             \"allowedClients\": \"0.0.0.0/0\",\n        //             \"kerberos5ReadOnly\": false,\n        //             \"kerberos5ReadWrite\": false,\n        //             \"kerberos5iReadOnly\": false,\n        //             \"kerberos5iReadWrite\": false,\n        //             \"kerberos5pReadOnly\": false,\n        //             \"kerberos5pReadWrite\": false,\n        //             \"hasRootAccess\": true\n        //         }\n        //     ]\n        // },\n        \"protocolTypes\": [\n            \"{{vol.protocolTypes}}\"\n        ],\n        \"subnetId\": \"{{vol.subnetId}}\",\n        \"networkFeatures\": \"Standard\",\n        \"isLargeVolume\": \"false\"\n    }\n}"
+              "raw": "{\n    \"type\": \"Microsoft.NetApp/netAppAccounts/capacityPools/volumes\",\n    \"location\": \"{{location}}\",\n    \"properties\": {\n        \"volumeType\": \"Migration\",\n        \"dataProtection\": {\n            \"replication\": {\n                \"endpointType\": \"Dst\",\n                \"replicationSchedule\": {{ma.replicationSchedule}},\n                \"remotePath\": {\n                    \"externalHostName\": \"{{ma.externalHostName}}\",\n                    \"serverName\": \"{{ma.serverName}}\",\n                    \"volumeName\": \"{{ma.volumeName}}\"\n                }\n            }\n        },\n        \"serviceLevel\": \"{{serviceLevel}}\",\n        \"throughputMibps\": \"{{throughputMibps}}\",\n        \"creationToken\": \"{{ma.volumeName}}\",\n        \"usageThreshold\": {{vol.usageThreshold}},\n        // \"exportPolicy\": {\n        //     \"rules\": [\n        //         {\n        //             \"ruleIndex\": 1,\n        //             \"unixReadOnly\": false,\n        //             \"unixReadWrite\": true,\n        //             \"cifs\": false,\n        //             \"nfsv3\": true,\n        //             \"nfsv41\": false,\n        //             \"allowedClients\": \"0.0.0.0/0\",\n        //             \"kerberos5ReadOnly\": false,\n        //             \"kerberos5ReadWrite\": false,\n        //             \"kerberos5iReadOnly\": false,\n        //             \"kerberos5iReadWrite\": false,\n        //             \"kerberos5pReadOnly\": false,\n        //             \"kerberos5pReadWrite\": false,\n        //             \"hasRootAccess\": true\n        //         }\n        //     ]\n        // },\n        \"protocolTypes\": [\n            \"{{vol.protocolTypes}}\"\n        ],\n        \"subnetId\": \"{{vol.subnetId}}\",\n        \"networkFeatures\": \"Standard\",\n        \"isLargeVolume\": \"false\"\n    }\n}"
             },
             "url": {
               "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}?api-version={{api-version}}",
@@ -147,7 +148,7 @@
                 }
               ]
             },
-            "description": "Create or update the specified volume within the capacity pool."
+            "description": "Creates the ANF target volume in migration mode. The request body must include `\"migrationVolume\": true` in the `dataProtection` properties to indicate this volume will receive data from an external ONTAP source via the Migration as a Service feature.\n\nThe operation is asynchronous. A `201 Created` or `202 Accepted` response will include an `Azure-AsyncOperation` header URL — save this value to the `ma.Azure-AsyncOperationID` environment variable before running the next step.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`, `vol.subnetId`, `vol.usageThreshold`, `vol.protocolTypes`, `serviceLevel`, `api-version`"
           },
           "response": []
         },
@@ -204,7 +205,7 @@
                 "{{ma.Azure-AsyncOperationID}}"
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Polls the Azure async operation URL to check whether the target volume creation (Step 1) has completed. Send this request repeatedly until the response body shows `\"status\": \"Succeeded\"` before proceeding to Step 3.\n\n**Required variables:** `ma.Azure-AsyncOperationID` (set automatically by the Step 1 post-response script, or manually from the `Azure-AsyncOperation` response header)"
           },
           "response": []
         },
@@ -286,7 +287,7 @@
                 }
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Initiates cluster peering between the ANF volume and the source ONTAP cluster. The request body must include the source cluster's external host name (`ma.externalHostName`) and peer IP addresses (`ma.peerAddresses`).\n\nThe operation is asynchronous. Save the `Azure-AsyncOperation` header URL to `ma.Azure-AsyncOperationID` before running Step 4.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`, `ma.externalHostName`, `ma.peerAddresses`, `api-version`"
           },
           "response": []
         },
@@ -343,7 +344,7 @@
                 "{{ma.Azure-AsyncOperationID}}"
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Polls the Azure async operation URL to retrieve the ONTAP CLI command and one-time passphrase needed to complete cluster peering on the source ONTAP side. Poll until `\"status\": \"Succeeded\"`, then run the returned command on the source ONTAP cluster CLI.\n\n**Required variables:** `ma.Azure-AsyncOperationID`"
           },
           "response": []
         },
@@ -427,7 +428,7 @@
                 }
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Authorizes the external replication relationship on the ANF target volume. This triggers the initial baseline data transfer from the source ONTAP volume to the ANF volume.\n\nThe operation is asynchronous. Save the `Azure-AsyncOperation` header URL to `ma.Azure-AsyncOperationID` before running Step 6.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`, `api-version`"
           },
           "response": []
         },
@@ -484,12 +485,12 @@
                 "{{ma.Azure-AsyncOperationID}}"
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Polls the Azure async operation URL to retrieve the ONTAP CLI command needed to complete SVM (vserver) peering on the source ONTAP cluster. Poll until `\"status\": \"Succeeded\"`, then run the returned command on the source ONTAP cluster CLI to finalize the SVM peer relationship.\n\n**Required variables:** `ma.Azure-AsyncOperationID`"
           },
           "response": []
         }
       ],
-      "description": "Establishes the replication relationship between the source (external ONTAP cluster) and the ANF target volume. Run these steps in order before initiating data replication.\n\n**Steps**\n\n1. **Step 0. Authorization** — Obtains an OAuth2 bearer token required to authenticate all subsequent API calls. The token is stored as a global variable and is valid for one hour.\n2. **Step 1. Create Target Volume** — Creates (or updates) the destination volume in the specified ANF capacity pool, configured to receive external replication data.\n3. **Step 2. Check Volume Creation Progress** — Polls the async operation URL to confirm the target volume has been successfully provisioned before proceeding.\n4. **Step 3. Issue Cluster Peer Request** — Initiates a cluster peering request between the ANF volume and the external ONTAP source cluster.\n5. **Step 4. Get Cluster Peering Command & Passphrase** — Retrieves the peering command and passphrase that must be run on the source ONTAP cluster to complete the cluster peer relationship.\n6. **Step 5. Authorize External Replication** — Authorizes the external replication relationship on the ANF target volume, enabling data transfer from the source.\n7. **Step 6. Get vServer Peering Command** — Retrieves the vServer peering command to be executed on the source cluster, finalizing the SVM-level peer relationship required for SnapMirror replication.",
+      "description": "Creates the ANF target volume and establishes the external replication relationship between the source ONTAP cluster and Azure NetApp Files. Run these steps in order to set up the migration pipeline.\n\n**Steps**\n\n1. **Create Target Volume** — Provisions the ANF volume that will receive replicated data from the source ONTAP volume. The volume is created in migration mode (`\"migrationVolume\": true`).\n2. **Check Volume Creation Progress** — Polls the Azure async operation URL to confirm the volume has been successfully provisioned before proceeding.\n3. **Issue Cluster Peer Request** — Initiates cluster peering between the source ONTAP cluster and ANF, returning the ONTAP peering command and a one-time passphrase.\n4. **Get Cluster Peering Command & Passphrase** — Polls the async operation to retrieve the ONTAP CLI command needed to complete cluster peering on the source side.\n5. **Authorize External Replication** — Authorizes the external replication relationship on the ANF volume, triggering the initial baseline data transfer from the source volume.\n6. **get vserver peering command** — Polls the async operation to retrieve the SVM (vserver) peering command required to complete the SVM peer relationship on the source ONTAP cluster.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`, `ma.externalHostName`, `ma.serverName`, `ma.peerAddresses`, `api-version`",
       "auth": {
         "type": "bearer",
         "bearer": [
@@ -529,7 +530,62 @@
       "name": "Pre-Cutover and Cutover",
       "item": [
         {
+          "name": "Get Replication Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/replicationStatus?api-version=2026-01-01",
+              "host": [
+                "{{apicloudurl}}"
+              ],
+              "path": [
+                "subscriptions",
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{ma.volumeName}}",
+                "replicationStatus"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "2026-01-01"
+                }
+              ]
+            },
+            "description": "Returns the current replication status of the ANF target volume, including the replication health, mirror state, relationship status, and lag time. Use this request to monitor ongoing replication progress and confirm the volume is in sync before initiating cutover.\n\n**Key response fields:**\n- `healthy` — `true` if the replication relationship is healthy.\n- `mirrorState` — `Mirrored` indicates the volume is in sync; `Uninitialized` or `Broken-off` indicates an issue.\n- `relationshipStatus` — `Idle` means no transfer is in progress; `Transferring` means a sync is active.\n- `totalProgress` — Bytes transferred in the current or last transfer.\n- `lagTime` — Time since the last successful transfer completed.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`"
+          },
+          "response": []
+        },
+        {
           "name": "Change Replication Schedule",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+                  "",
+                  "if (asyncOperationValue) {",
+                  "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+                  "} else {",
+                  "    console.warn(\"azure-asyncoperation header not found\");",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
           "request": {
             "auth": {
               "type": "bearer",
@@ -545,7 +601,7 @@
             "header": [],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"properties\": {\n        \"dataProtection\": {\n            \"replication\": {\n                \"replicationSchedule\": \"_10minutely\"\n            }\n        }\n    }\n}",
+              "raw": "{\n    \"properties\": {\n        \"dataProtection\": {\n            \"replication\": {\n                \"replicationSchedule\": {{ma.replicationSchedule}}\n            }\n        }\n    }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -553,11 +609,12 @@
               }
             },
             "url": {
-              "raw": "{{resource}}subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}?api-version=2026-01-01",
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}?api-version=2026-01-01",
               "host": [
-                "{{resource}}subscriptions"
+                "{{apicloudurl}}"
               ],
               "path": [
+                "subscriptions",
                 "{{subscriptionId}}",
                 "resourceGroups",
                 "{{resourceGroupName}}",
@@ -576,21 +633,84 @@
                   "value": "2026-01-01"
                 }
               ]
-            }
+            },
+            "description": "Updates the replication schedule on the ANF target volume using a PATCH request. Use this before cutover to increase transfer frequency (e.g., switch from `daily` to `hourly`) to minimize the data lag at the time of the final sync.\n\nSet `ma.replicationSchedule` in the environment to the desired schedule value (`_10minutely`, `hourly`, `daily`).\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`, `ma.replicationSchedule`"
           },
           "response": []
         },
         {
-          "name": "Issue Re-Sync Request",
+          "name": "Issue Re-Initialize Replicaition",
           "event": [
             {
               "listen": "test",
               "script": {
                 "exec": [
-                  ""
+                  "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+                  "",
+                  "if (asyncOperationValue) {",
+                  "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+                  "} else {",
+                  "    console.warn(\"azure-asyncoperation header not found\");",
+                  "}"
                 ],
                 "type": "text/javascript",
-                "packages": {}
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/reinitializeReplication?api-version=2026-01-01",
+              "host": [
+                "{{apicloudurl}}"
+              ],
+              "path": [
+                "subscriptions",
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{ma.volumeName}}",
+                "reinitializeReplication"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "2026-01-01"
+                }
+              ]
+            },
+            "description": "Re-initializes the external replication relationship on the ANF target volume. Use this if the replication relationship has entered an error state and needs to be reset to restart the baseline transfer from the source ONTAP volume.\n\nThe operation is asynchronous. Poll the `Azure-AsyncOperation` URL from the response header to confirm completion.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`"
+          },
+          "response": []
+        },
+        {
+          "name": "Issue Replication Transfer Sync Now",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+                  "",
+                  "if (asyncOperationValue) {",
+                  "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+                  "} else {",
+                  "    console.warn(\"azure-asyncoperation header not found\");",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
               }
             }
           ],
@@ -613,7 +733,7 @@
               "raw": ""
             },
             "url": {
-              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{volumeName}}/performReplicationTransfer?api-version={{api-version}}",
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/performReplicationTransfer?api-version={{api-version}}",
               "host": [
                 "{{apicloudurl}}"
               ],
@@ -629,7 +749,7 @@
                 "capacityPools",
                 "{{poolName}}",
                 "volumes",
-                "{{volumeName}}",
+                "{{ma.volumeName}}",
                 "performReplicationTransfer"
               ],
               "query": [
@@ -639,7 +759,7 @@
                 }
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Triggers an on-demand replication transfer from the source ONTAP volume to the ANF target volume, outside of the scheduled replication interval. Use this immediately before cutover to perform a final data sync and minimize data loss.\n\nThe operation is asynchronous. Poll the `Azure-AsyncOperation` URL from the response header to confirm the transfer has completed before proceeding to break the replication relationship.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`, `api-version`"
           },
           "response": []
         },
@@ -709,29 +829,24 @@
                 }
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Breaks the external replication relationship between the source ONTAP volume and the ANF target volume. Once broken, the ANF volume transitions from read-only (data protection) mode to read-write mode and can serve production workloads.\n\n**This action is the point of no return for cutover.** Ensure a final sync has been completed (Issue Replication Transfer Sync Now) and all application connections to the source volume have been quiesced before running this request.\n\nThe operation is asynchronous. Poll the `Azure-AsyncOperation` URL from the response header to confirm completion before proceeding to finalize.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`, `api-version`"
           },
           "response": []
         },
         {
-          "name": "get Async ID - Break",
+          "name": "Issue Reestablish Replication",
           "event": [
             {
               "listen": "test",
               "script": {
                 "exec": [
-                  ""
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            },
-            {
-              "listen": "prerequest",
-              "script": {
-                "exec": [
-                  ""
+                  "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+                  "",
+                  "if (asyncOperationValue) {",
+                  "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+                  "} else {",
+                  "    console.warn(\"azure-asyncoperation header not found\");",
+                  "}"
                 ],
                 "type": "text/javascript",
                 "packages": {},
@@ -739,34 +854,46 @@
               }
             }
           ],
-          "protocolProfileBehavior": {
-            "disableBodyPruning": true
-          },
           "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}",
-                "type": "text"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
+            "method": "POST",
+            "header": [],
             "body": {
               "mode": "raw",
-              "raw": ""
+              "raw": "{\n  \"sourceVolumeId\": \"/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
-              "raw": "{{ma.Azure-AsyncOperationID}}",
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/reestablishReplication?api-version=2026-01-01",
               "host": [
-                "{{ma.Azure-AsyncOperationID}}"
+                "{{apicloudurl}}"
+              ],
+              "path": [
+                "subscriptions",
+                "{{subscriptionId}}",
+                "resourceGroups",
+                "{{resourceGroupName}}",
+                "providers",
+                "Microsoft.NetApp",
+                "netAppAccounts",
+                "{{accountName}}",
+                "capacityPools",
+                "{{poolName}}",
+                "volumes",
+                "{{ma.volumeName}}",
+                "reestablishReplication"
+              ],
+              "query": [
+                {
+                  "key": "api-version",
+                  "value": "2026-01-01"
+                }
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Re-establishes a previously broken external replication relationship on the ANF target volume. Use this if the replication relationship was broken prematurely or if a rollback is needed after a failed cutover attempt.\n\nThe operation is asynchronous. Poll the `Azure-AsyncOperation` URL from the response header to confirm the relationship has been successfully re-established.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`"
           },
           "response": []
         },
@@ -836,12 +963,12 @@
                 }
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Finalizes the external replication configuration on the ANF volume, completing the Migration as a Service workflow. This removes the migration-mode designation from the volume and cleans up the replication metadata, leaving the ANF volume as a standard read-write volume ready for production use.\n\nRun this only after the replication relationship has been successfully broken (Issue Break Relationship Request) and the ANF volume is confirmed to be serving data.\n\nThe operation is asynchronous. Poll the `Azure-AsyncOperation` URL from the response header to confirm completion.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`, `api-version`"
           },
           "response": []
         },
         {
-          "name": "get Async ID - Finalize",
+          "name": "get Async ID",
           "event": [
             {
               "listen": "test",
@@ -893,7 +1020,7 @@
                 "{{ma.Azure-AsyncOperationID}}"
               ]
             },
-            "description": "Request an Azure API authentication token - valid for 1 hour. Sets a global variable (\"token\") that is used by the other API calls."
+            "description": "Polls an Azure async operation URL to check the status of a long-running ANF API operation. Send this request after any asynchronous operation (break, finalize, re-establish, etc.) and repeat until the response body shows `\"status\": \"Succeeded\"` or `\"Failed\"`.\n\n**Required variables:** `ma.Azure-AsyncOperationID` (set from the `Azure-AsyncOperation` response header of the preceding async request)"
           },
           "response": []
         }
@@ -928,7 +1055,13 @@
             "packages": {},
             "requests": {},
             "exec": [
-              ""
+              "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
+              "",
+              "if (asyncOperationValue) {",
+              "    pm.environment.set('ma.Azure-AsyncOperationID', asyncOperationValue);",
+              "} else {",
+              "    console.warn(\"azure-asyncoperation header not found\");",
+              "}"
             ]
           }
         }
