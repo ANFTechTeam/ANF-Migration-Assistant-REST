@@ -89,6 +89,17 @@
               "listen": "prerequest",
               "script": {
                 "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
                   "let asyncOperationValue = pm.response.headers.get('azure-asyncoperation');",
                   "",
                   "if (asyncOperationValue) {",
@@ -120,7 +131,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"type\": \"Microsoft.NetApp/netAppAccounts/capacityPools/volumes\",\n    \"location\": \"{{location}}\",\n    \"properties\": {\n        \"volumeType\": \"Migration\",\n        \"dataProtection\": {\n            \"replication\": {\n                \"endpointType\": \"Dst\",\n                \"replicationSchedule\": {{ma.replicationSchedule}},\n                \"remotePath\": {\n                    \"externalHostName\": \"{{ma.externalHostName}}\",\n                    \"serverName\": \"{{ma.serverName}}\",\n                    \"volumeName\": \"{{ma.volumeName}}\"\n                }\n            }\n        },\n        \"serviceLevel\": \"{{serviceLevel}}\",\n        \"throughputMibps\": \"{{throughputMibps}}\",\n        \"creationToken\": \"{{ma.volumeName}}\",\n        \"usageThreshold\": {{vol.usageThreshold}},\n        // \"exportPolicy\": {\n        //     \"rules\": [\n        //         {\n        //             \"ruleIndex\": 1,\n        //             \"unixReadOnly\": false,\n        //             \"unixReadWrite\": true,\n        //             \"cifs\": false,\n        //             \"nfsv3\": true,\n        //             \"nfsv41\": false,\n        //             \"allowedClients\": \"0.0.0.0/0\",\n        //             \"kerberos5ReadOnly\": false,\n        //             \"kerberos5ReadWrite\": false,\n        //             \"kerberos5iReadOnly\": false,\n        //             \"kerberos5iReadWrite\": false,\n        //             \"kerberos5pReadOnly\": false,\n        //             \"kerberos5pReadWrite\": false,\n        //             \"hasRootAccess\": true\n        //         }\n        //     ]\n        // },\n        \"protocolTypes\": [\n            \"{{vol.protocolTypes}}\"\n        ],\n        \"subnetId\": \"{{vol.subnetId}}\",\n        \"networkFeatures\": \"Standard\",\n        \"isLargeVolume\": \"false\"\n    }\n}"
+              "raw": "{\n    \"type\": \"Microsoft.NetApp/netAppAccounts/capacityPools/volumes\",\n    \"location\": \"{{location}}\",\n    \"properties\": {\n        \"volumeType\": \"Migration\",\n        \"dataProtection\": {\n            \"replication\": {\n                \"endpointType\": \"Dst\",\n                \"replicationSchedule\": \"{{ma.replicationSchedule}}\",\n                \"remotePath\": {\n                    \"externalHostName\": \"{{ma.externalHostName}}\",\n                    \"serverName\": \"{{ma.serverName}}\",\n                    \"volumeName\": \"{{ma.volumeName}}\"\n                }\n            }\n        },\n        \"serviceLevel\": \"{{serviceLevel}}\",\n        \"throughputMibps\": \"{{throughputMibps}}\",\n        \"creationToken\": \"{{ma.volumeName}}\",\n        \"usageThreshold\": {{vol.usageThreshold}},\n        // \"exportPolicy\": {\n        //     \"rules\": [\n        //         {\n        //             \"ruleIndex\": 1,\n        //             \"unixReadOnly\": false,\n        //             \"unixReadWrite\": true,\n        //             \"cifs\": false,\n        //             \"nfsv3\": true,\n        //             \"nfsv41\": false,\n        //             \"allowedClients\": \"0.0.0.0/0\",\n        //             \"kerberos5ReadOnly\": false,\n        //             \"kerberos5ReadWrite\": false,\n        //             \"kerberos5iReadOnly\": false,\n        //             \"kerberos5iReadWrite\": false,\n        //             \"kerberos5pReadOnly\": false,\n        //             \"kerberos5pReadWrite\": false,\n        //             \"hasRootAccess\": true\n        //         }\n        //     ]\n        // },\n        \"protocolTypes\": [\n            \"{{vol.protocolTypes}}\"\n        ],\n        \"subnetId\": \"{{vol.subnetId}}\",\n        \"networkFeatures\": \"Standard\",\n        \"isLargeVolume\": \"false\"\n    }\n}"
             },
             "url": {
               "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}?api-version={{api-version}}",
@@ -530,6 +541,63 @@
       "name": "Pre-Cutover and Cutover",
       "item": [
         {
+          "name": "Get Async ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{ma.Azure-AsyncOperationID}}",
+              "host": [
+                "{{ma.Azure-AsyncOperationID}}"
+              ]
+            },
+            "description": "Polls an Azure async operation URL to check the status of a long-running ANF API operation. Send this request after any asynchronous operation (break, finalize, re-establish, etc.) and repeat until the response body shows `\"status\": \"Succeeded\"` or `\"Failed\"`.\n\n**Required variables:** `ma.Azure-AsyncOperationID` (set from the `Azure-AsyncOperation` response header of the preceding async request)"
+          },
+          "response": []
+        },
+        {
           "name": "Get Replication Status",
           "request": {
             "method": "GET",
@@ -867,7 +935,7 @@
               }
             },
             "url": {
-              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/reestablishReplication?api-version=2026-01-01",
+              "raw": "{{apicloudurl}}/subscriptions/{{subscriptionId}}/resourceGroups/{{resourceGroupName}}/providers/Microsoft.NetApp/netAppAccounts/{{accountName}}/capacityPools/{{poolName}}/volumes/{{ma.volumeName}}/resyncReplication?api-version=2026-01-01",
               "host": [
                 "{{apicloudurl}}"
               ],
@@ -884,7 +952,7 @@
                 "{{poolName}}",
                 "volumes",
                 "{{ma.volumeName}}",
-                "reestablishReplication"
+                "resyncReplication"
               ],
               "query": [
                 {
@@ -966,63 +1034,6 @@
             "description": "Finalizes the external replication configuration on the ANF volume, completing the Migration as a Service workflow. This removes the migration-mode designation from the volume and cleans up the replication metadata, leaving the ANF volume as a standard read-write volume ready for production use.\n\nRun this only after the replication relationship has been successfully broken (Issue Break Relationship Request) and the ANF volume is confirmed to be serving data.\n\nThe operation is asynchronous. Poll the `Azure-AsyncOperation` URL from the response header to confirm completion.\n\n**Required variables:** `apicloudurl`, `subscriptionId`, `resourceGroupName`, `accountName`, `poolName`, `ma.volumeName`, `api-version`"
           },
           "response": []
-        },
-        {
-          "name": "get Async ID",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  ""
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            },
-            {
-              "listen": "prerequest",
-              "script": {
-                "exec": [
-                  ""
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "protocolProfileBehavior": {
-            "disableBodyPruning": true
-          },
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}",
-                "type": "text"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": ""
-            },
-            "url": {
-              "raw": "{{ma.Azure-AsyncOperationID}}",
-              "host": [
-                "{{ma.Azure-AsyncOperationID}}"
-              ]
-            },
-            "description": "Polls an Azure async operation URL to check the status of a long-running ANF API operation. Send this request after any asynchronous operation (break, finalize, re-establish, etc.) and repeat until the response body shows `\"status\": \"Succeeded\"` or `\"Failed\"`.\n\n**Required variables:** `ma.Azure-AsyncOperationID` (set from the `Azure-AsyncOperation` response header of the preceding async request)"
-          },
-          "response": []
         }
       ],
       "description": "Prepares the ANF target volume for cutover and severs the external replication relationship from the source ONTAP cluster. Run these steps in order when you are ready to migrate workloads to ANF.\n\n**Steps**\n\n1. **Change Replication Schedule** — Adjusts the replication schedule on the target volume (e.g. to increase transfer frequency) in preparation for the final sync before cutover.\n2. **Issue Re-Sync Request** — Triggers an on-demand replication transfer to perform a final data sync from the source volume to the ANF target.\n3. **Issue Break Relationship Request** — Breaks the external replication relationship, making the ANF target volume writable and ready to serve data.\n4. **get Async ID - Break** — Polls the Azure async operation URL to confirm the break-replication request has completed successfully.\n5. **Issue Finalize External Replication** — Finalises the external replication configuration on the ANF volume, completing the migration.\n6. **get Async ID - Finalize** — Polls the Azure async operation URL to confirm the finalize request has completed successfully.",
@@ -1090,12 +1101,6 @@
           ""
         ]
       }
-    }
-  ],
-  "variable": [
-    {
-      "key": "ma.Azure-AsyncOperation ID",
-      "value": ""
     }
   ]
 }
