@@ -669,7 +669,7 @@
             "header": [],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"properties\": {\n        \"dataProtection\": {\n            \"replication\": {\n                \"replicationSchedule\": {{ma.replicationSchedule}}\n            }\n        }\n    }\n}",
+              "raw": "{\n    \"properties\": {\n        \"dataProtection\": {\n            \"replication\": {\n                \"replicationSchedule\": \"{{ma.replicationSchedule}}\"\n            }\n        }\n    }\n}",
               "options": {
                 "raw": {
                   "language": "json"
